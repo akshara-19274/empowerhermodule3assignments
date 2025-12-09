@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Book Management (Realtime DB + fetch)</title>
+  <style>
+    :root{--bg:#f6f8fb;--card:#fff;--muted:#6b7280;--accent:#2563eb}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:#111}
+    .container{display:flex;gap:20px;padding:20px;min-height:100vh}
+    .sidebar{width:300px;background:var(--card);padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(16,24,40,0.06)}
+    .sidebar h2{margin:0 0 12px;font-size:20px}
+    .form-row{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+    .form-row input{padding:10px;border:1px solid #e6e9ef;border-radius:8px;font-size:14px}
+    .btn{display:inline-block;padding:10px 14px;border-radius:8px;border:0;background:var(--accent);color:#fff;cursor:pointer;font-weight:600}
+    .btn.secondary{background:#efefef;color:#111}
+    .main{flex:1}
+    .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .card{background:var(--card);border-radius:10px;overflow:hidden;box-shadow:0 6px 18px rgba(16,24,40,0.06);display:flex;flex-direction:column}
+    .card img{width:100%;height:200px;object-fit:cover}
+    .card-body{padding:12px;flex:1;display:flex;flex-direction:column;gap:8px}
+    .card h3{margin:0;font-size:16px}
+    .meta{color:var(--muted);font-size:13px}
+    .card-actions{display:flex;gap:8px;margin-top:auto}
+    .card-actions button{flex:1;padding:8px;border-radius:8px;border:0;cursor:pointer}
+    .card-actions .update{background:#f59e0b;color:#fff}
+    .card-actions .delete{background:#ef4444;color:#fff}
+    .card-actions .view{background:#10b981;color:#fff}
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:none;align-items:center;justify-content:center;padding:20px}
+    .modal{background:var(--card);width:100%;max-width:600px;border-radius:10px;padding:18px;box-shadow:0 10px 30px rgba(2,6,23,0.4)}
+    .modal img{width:100%;height:300px;object-fit:cover;border-radius:8px}
+    .modal h3{margin:12px 0 6px}
+    .modal .close{background:#efefef;border:0;padding:8px 12px;border-radius:8px;cursor:pointer}
+    @media (max-width:1000px){ .grid{grid-template-columns:repeat(2,1fr)} .sidebar{width:260px} }
+    @media (max-width:700px){ .container{flex-direction:column} .sidebar{width:100%} .grid{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <aside class="sidebar">
+      <h2>Add Book</h2>
+      <form id="addBookForm" autocomplete="off">
+        <div class="form-row"><input id="title" name="title" placeholder="Title" required /></div>
+        <div class="form-row"><input id="author" name="author" placeholder="Author" required /></div>
+        <div class="form-row"><input id="price" name="price" type="number" step="0.01" placeholder="Price" required /></div>
+        <div class="form-row"><input id="image" name="image" placeholder="Cover Image URL" required /></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" type="submit">Add Book</button>
+          <button class="btn secondary" type="button" id="clearBtn">Clear</button>
+        </div>
+      </form>
+
+      <hr style="margin:16px 0;border:none;border-top:1px solid #eef2f7" />
+
+      <div>
+        <strong>Notes</strong>
+        <p style="color:var(--muted);font-size:13px;margin:8px 0 0">
+          Uses Firebase Realtime Database. Writes use fetch POST/PATCH/DELETE; reads use realtime listener.
+        </p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="header">
+        <h2>Books</h2>
+        <div style="color:var(--muted)">Realtime sync (Realtime DB)</div>
+      </div>
+
+      <div id="booksGrid" class="grid" aria-live="polite"></div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal" id="modal">
+      <button class="close" id="modalClose">Close</button>
+      <img id="modalImage" src="" alt="Cover image" />
+      <h3 id="modalTitle"></h3>
+      <p id="modalAuthor" class="meta"></p>
+      <p id="modalPrice" style="font-weight:600"></p>
+      <p id="modalId" style="color:var(--muted);font-size:12px;word-break:break-all"></p>
+    </div>
+  </div>
+
+  <script type="module">
+    // ====== CONFIG: replace with your Realtime DB base URL ======
+    // Example: const RTDB_BASE = "https://my-demo-app-default-rtdb.firebaseio.com";
+    const RTDB_BASE = "https://YOUR_PROJECT_ID.firebaseio.com";
+    // ===========================================================
+
+    // Import Firebase Realtime Database SDK for realtime reads
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+
+    // Minimal firebase config is required to initialize SDK for realtime listener.
+    // You still need to create a Web app in Firebase console and paste its config here.
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      databaseURL: RTDB_BASE,
+      projectId: "YOUR_PROJECT_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // Initialize Firebase app and Realtime Database SDK
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    // DOM refs
+    const addForm = document.getElementById('addBookForm');
+    const titleInput = document.getElementById('title');
+    const authorInput = document.getElementById('author');
+    const priceInput = document.getElementById('price');
+    const imageInput = document.getElementById('image');
+    const clearBtn = document.getElementById('clearBtn');
+    const grid = document.getElementById('booksGrid');
+
+    const modalBackdrop = document.getElementById('modalBackdrop');
+    const modalClose = document.getElementById('modalClose');
+    const modalImage = document.getElementById('modalImage');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalAuthor = document.getElementById('modalAuthor');
+    const modalPrice = document.getElementById('modalPrice');
+    const modalId = document.getElementById('modalId');
+
+    // Utility: escape HTML for safe insertion
+    function escapeHtml(str){
+      if(!str) return '';
+      return String(str)
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'",'&#039;');
+    }
+
+    // ---------- Realtime listener (reads) ----------
+    // Listen to /books node and render whenever it changes
+    const booksRef = ref(db, 'books');
+    onValue(booksRef, snapshot => {
+      const val = snapshot.val();
+      const books = [];
+      if(val){
+        // val is an object of keys -> book objects
+        Object.keys(val).forEach(key => {
+          books.push({ id: key, ...val[key] });
+        });
+        // optional: sort by title
+        books.sort((a,b) => (a.title||'').localeCompare(b.title||''));
+      }
+      renderBooks(books);
+    }, err => {
+      console.error('Realtime listener error', err);
+      grid.innerHTML = '<div style="grid-column:1/-1;padding:24px;background:#fff;border-radius:10px;text-align:center;color:#ef4444">Error loading books</div>';
+    });
+
+    // ---------- Render ----------
+    function renderBooks(books){
+      grid.innerHTML = '';
+      if(books.length === 0){
+        grid.innerHTML = '<div style="grid-column:1/-1;padding:24px;background:#fff;border-radius:10px;text-align:center;color:var(--muted)">No books found</div>';
+        return;
+      }
+      books.forEach(b => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <img src="${escapeHtml(b.coverImageURL || '')}" alt="${escapeHtml(b.title)} cover" onerror="this.src='https://via.placeholder.com/400x300?text=No+Image'"/>
+          <div class="card-body">
+            <h3>${escapeHtml(b.title)}</h3>
+            <div class="meta">Author: ${escapeHtml(b.author)}</div>
+            <div style="font-weight:600">Price: ₹${Number(b.price || 0).toFixed(2)}</div>
+            <div class="card-actions">
+              <button class="update">Update Author</button>
+              <button class="delete">Delete</button>
+              <button class="view">View Details</button>
+            </div>
+          </div>
+        `;
+        const [updateBtn, deleteBtn, viewBtn] = card.querySelectorAll('button');
+        updateBtn.addEventListener('click', () => promptUpdateAuthor(b.id, b.author));
+        deleteBtn.addEventListener('click', () => confirmDelete(b.id, b.title));
+        viewBtn.addEventListener('click', () => openModal(b));
+        grid.appendChild(card);
+      });
+    }
+
+    // ---------- Writes using fetch (POST / PATCH / DELETE) ----------
+    // Add book (POST) — uses the same pattern you provided
+    addForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const book = {
+        title: titleInput.value.trim(),
+        author: authorInput.value.trim(),
+        price: Number(priceInput.value) || 0,
+        coverImageURL: imageInput.value.trim()
+      };
+      try {
+        const res = await fetch(`${RTDB_BASE}/books.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(book)
+        });
+        const data = await res.json(); // { name: "-MxyzGeneratedKey" }
+        console.log('Added book key:', data);
+        addForm.reset();
+      } catch (err) {
+        console.error('Add book failed', err);
+        alert('Failed to add book. Check console.');
+      }
+    });
+
+    // Update author (PATCH)
+    async function promptUpdateAuthor(key, currentAuthor){
+      const newAuthor = prompt('Enter new author name', currentAuthor || '');
+      if(newAuthor === null) return;
+      const trimmed = newAuthor.trim();
+      if(trimmed.length === 0){ alert('Author name cannot be empty'); return; }
+      try {
+        await fetch(`${RTDB_BASE}/books/${encodeURIComponent(key)}.json`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ author: trimmed })
+        });
+      } catch (err) {
+        console.error('Update failed', err);
+        alert('Failed to update author.');
+      }
+    }
+
+    // Delete book (DELETE)
+    async function confirmDelete(key, title){
+      const ok = confirm(`Delete "${title}"? This action cannot be undone.`);
+      if(!ok) return;
+      try {
+        await fetch(`${RTDB_BASE}/books/${encodeURIComponent(key)}.json`, {
+          method: "DELETE"
+        });
+      } catch (err) {
+        console.error('Delete failed', err);
+        alert('Failed to delete book.');
+      }
+    }
+
+    // ---------- Modal ----------
+    function openModal(book){
+      modalImage.src = book.coverImageURL || 'https://via.placeholder.com/600x400?text=No+Image';
+      modalTitle.textContent = book.title || '';
+      modalAuthor.textContent = 'Author: ' + (book.author || '');
+      modalPrice.textContent = 'Price: ₹' + (Number(book.price || 0).toFixed(2));
+      modalId.textContent = 'Key: ' + book.id;
+      modalBackdrop.style.display = 'flex';
+    }
+    function closeModal(){ modalBackdrop.style.display = 'none'; }
+    modalClose.addEventListener('click', closeModal);
+    modalBackdrop.addEventListener('click', (e) => { if(e.target === modalBackdrop) closeModal(); });
+
+    // Clear form
+    clearBtn.addEventListener('click', () => addForm.reset());
+
+    // Expose for debugging if needed
+    window.promptUpdateAuthor = promptUpdateAuthor;
+    window.confirmDelete = confirmDelete;
+    window.openModal = openModal;
+  </script>
+</body>
+</html>
