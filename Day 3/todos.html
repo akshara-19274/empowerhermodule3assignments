@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Todos</title>
+  <script type="module">
+    import { Navbar } from "./navbar.js";
+    import { Footer } from "./footer.js";
+    import { displayTodos } from "./displayTodos.js";
+
+    document.body.prepend(Navbar());
+    document.body.append(Footer());
+
+    if (localStorage.getItem("loggedIn") !== "true") {
+      alert("Please login first!");
+      window.location.href = "login.html";
+    } else {
+      fetch("https://jsonplaceholder.typicode.com/todos")
+        .then(res => res.json())
+        .then(data => {
+          displayTodos(data);
+        });
+    }
+  </script>
+</head>
+<body>
+  <h2>Your Todos</h2>
+  <div id="todosContainer"></div>
+</body>
+</html>
